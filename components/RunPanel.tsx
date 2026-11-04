@@ -82,7 +82,8 @@ export default function RunPanel({
       })
       if (!res.ok || !res.body) {
         const data = await res.json().catch(() => ({}))
-        throw new Error(data.error ?? `The run couldn't start (${res.status}).`)
+        setError(data.error ?? `The run couldn't start (${res.status}).`)
+        return
       }
 
       const reader = res.body.getReader()
@@ -113,6 +114,7 @@ export default function RunPanel({
                 ...st[ev.order],
                 status: 'done',
                 text: ev.text,
+                model: ev.model ?? st[ev.order]?.model,
                 ms: ev.ms,
                 tokens: ev.outputTokens,
               },

@@ -22,14 +22,17 @@ export async function loadImage(url: string): Promise<GeminiImage> {
   return { mime, base64: bytes.toString('base64') }
 }
 
-/** One Gemini call. Retries when the model is busy (429 / 503). */
+/**
+ * One Gemini call. Tries each model in `models` in order: retries a busy model
+ * (429 / 503) a few times, then falls back to the next model in the list.
+ */
 export async function callGemini(opts: {
-  model: string
+  models: string[]
   system?: string | null
   prompt: string
   temperature?: number | null
   image?: GeminiImage | null
-}): Promise<GeminiResult> {
+}): Promise<GeminiResult & { model: string }> {
   const key = process.env.GEMINI_API_KEY
   if (!key) throw new Error('GEMINI_API_KEY is not set for this app.')
 
@@ -43,36 +46,56 @@ export async function callGemini(opts: {
   })
 
   let lastError = 'Gemini did not respond.'
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(opts.model)}:generateContent`,
-      { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key }, body }
-    )
-    const data = await res.json().catch(() => ({}))
-    if (res.ok) {
-      const cand = data.candidates?.[0]
-      const text = (cand?.content?.parts ?? [])
-        .map((p: { text?: string }) => p.text ?? '')
-        .join('')
-        .trim()
-      if (!text) {
-        const why = cand?.finishReason ?? data.promptFeedback?.blockReason
-        throw new Error(`Gemini returned no text${why ? ` (${why})` : ''}.`)
+  let wasBusy = false
+
+  for (const model of opts.models) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+          { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key }, body }
+      )
+      const data = await res.json().catch(() => ({}))
+
+      if (res.ok) {
+        const cand = data.candidates?.[0]
+        const text = (cand?.content?.parts ?? [])
+            .map((p: { text?: string }) => p.text ?? '')
+            .join('')
+            .trim()
+        if (!text) {
+          const why = cand?.finishReason ?? data.promptFeedback?.blockReason
+          throw new Error(`Gemini returned no text${why ? ` (${why})` : ''}.`)
+        }
+        return {
+          text,
+          model,
+          inputTokens: data.usageMetadata?.promptTokenCount ?? null,
+          outputTokens: data.usageMetadata?.candidatesTokenCount ?? null,
+          finishReason: cand?.finishReason ?? null,
+        }
       }
-      return {
-        text,
-        inputTokens: data.usageMetadata?.promptTokenCount ?? null,
-        outputTokens: data.usageMetadata?.candidatesTokenCount ?? null,
-        finishReason: cand?.finishReason ?? null,
+
+      const msg = data.error?.message ?? `Gemini error ${res.status}`
+      console.error(`[gemini] ${model} attempt ${attempt + 1} (${res.status}):`, msg)
+
+      if (res.status === 429 || res.status === 503 || res.status === 500) {
+        wasBusy = true
+        lastError = msg
+        await sleep(800 * 2 ** attempt) // 0.8 s, 1.6 s, 3.2 s
+        continue
       }
+      if (res.status === 404) {
+        // A missing backup model shouldn't hide the real "busy" problem.
+        if (!wasBusy) lastError = `Model "${model}" wasn't found. Check its API model ID in the admin panel.`
+        break // try the next model
+      }
+      throw new Error(msg) // bad key, bad request, etc.: another model won't help
     }
-    lastError = data.error?.message ?? `Gemini error ${res.status}`
-    if (res.status === 429 || res.status === 503) {
-      await sleep(1000 * 2 ** attempt)
-      continue
-    }
-    if (res.status === 404) lastError = `Model "${opts.model}" wasn't found. Check its API model ID in the admin panel.`
-    break
   }
-  throw new Error(lastError)
+
+  throw new Error(
+      wasBusy
+          ? `Every model tried (${opts.models.join(', ')}) is busy right now. Wait a minute and run again.`
+          : lastError
+  )
 }

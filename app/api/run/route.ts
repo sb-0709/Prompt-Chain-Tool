@@ -8,6 +8,11 @@ export const maxDuration = 300
 export const dynamic = 'force-dynamic'
 
 const DEFAULT_MODEL = process.env.GEMINI_DEFAULT_MODEL || 'gemini-3.8-flash'
+// Extra backups, comma-separated, tried after the models in your database.
+const ENV_FALLBACKS = (process.env.GEMINI_FALLBACK_MODELS || 'gemini-flash-latest,gemini-flash-lite-latest')
+    .split(',')
+    .map((m) => m.trim())
+    .filter(Boolean)
 
 type StepRow = Step & { llm_models: { model_id: string; name: string } | null }
 
@@ -49,6 +54,24 @@ export async function POST(request: Request) {
       .map((p) => `Step ${i + 1}: ${p}`)
   )
   if (blocking.length) return Response.json({ error: blocking.join(' ') }, { status: 400 })
+
+  // Active models from the admin panel, used as backups when a step's model is busy.
+  const { data: activeModels } = await supabase
+      .from('llm_models')
+      .select('id, name, model_id, supports_vision')
+      .eq('is_active', true)
+      .order('id')
+  const models = activeModels ?? []
+
+  /** The step's own model first, then the other active models, then env backups. */
+  const modelsFor = (s: StepRow) => {
+    const primary = s.llm_models?.model_id ?? DEFAULT_MODEL
+    const backups = models
+        .filter((m) => !s.include_image || m.supports_vision)
+        .map((m) => m.model_id)
+    return [...new Set([primary, ...backups, ...ENV_FALLBACKS])]
+  }
+  const modelLabel = (modelId: string) => models.find((m) => m.model_id === modelId)?.name ?? modelId
 
   const needsImage = steps.some((s) => s.include_image)
   if (needsImage && !imageUrl)
@@ -100,7 +123,7 @@ export async function POST(request: Request) {
           const t0 = Date.now()
           const ctx = { userPrompt, outputs }
           const result = await callGemini({
-            model: s.llm_models?.model_id ?? DEFAULT_MODEL,
+            models: modelsFor(s),
             system: s.system_prompt ? render(s.system_prompt, ctx) : null,
             prompt: render(s.user_prompt_template, ctx),
             temperature: s.temperature,
@@ -110,7 +133,7 @@ export async function POST(request: Request) {
 
           await supabase.from('llm_responses').insert({
             request_id: req.id,
-            model_id: s.model_id,
+            model_id: models.find((m) => m.model_id === result.model)?.id ?? s.model_id,
             step_order: current,
             response_text: result.text,
             input_tokens: result.inputTokens,
@@ -122,6 +145,7 @@ export async function POST(request: Request) {
             type: 'step',
             order: current,
             text: result.text,
+            model: modelLabel(result.model),
             ms: Date.now() - t0,
             inputTokens: result.inputTokens,
             outputTokens: result.outputTokens,
