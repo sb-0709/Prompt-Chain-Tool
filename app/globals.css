@@ -192,12 +192,16 @@ textarea.prompt { font-family: var(--mono); font-size: 13px; line-height: 1.6; }
   font-variant-numeric: tabular-nums;
 }
 .rail > li:last-child .node { background: var(--accent); color: var(--accent-ink); }
-.node.is-running { border-style: dashed; animation: spin 1.6s linear infinite; }
+.node.is-running { border-color: transparent; }
+.node.is-running::after {
+  content: ''; position: absolute; inset: -2px; border-radius: 50%;
+  border: 2px dashed var(--accent); animation: spin 1.6s linear infinite;
+}
 .node.is-done { background: var(--accent); color: var(--accent-ink); }
 .node.is-error { border-color: var(--danger); color: var(--danger); background: var(--surface); }
 .node.is-pending { border-color: var(--line-strong); color: var(--muted); }
 .rail > li:last-child .node.is-pending { background: var(--surface); color: var(--muted); }
-@keyframes spin { to { transform: translateX(-50%) rotate(360deg); } }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 .step {
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md);

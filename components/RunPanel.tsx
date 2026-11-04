@@ -240,8 +240,8 @@ export default function RunPanel({
             Extra instructions{' '}
             <span className="field-hint">
               {usesUserPrompt
-                ? 'fills {{user_prompt}} in this chain'
-                : 'no step uses {{user_prompt}}, so this is only saved with the run'}
+                  ? '(optional) added to the prompts of the steps that use it'
+                  : "(optional) this chain's steps don't use it, so it's only saved with the run"}
             </span>
           </span>
           <textarea

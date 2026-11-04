@@ -2,6 +2,9 @@ import 'server-only'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+// Give up on one model call after this long and try the next model.
+const TIMEOUT_MS = Number(process.env.GEMINI_TIMEOUT_MS) || 25_000
+
 export type GeminiImage = { mime: string; base64: string }
 
 export type GeminiResult = {
@@ -50,11 +53,29 @@ export async function callGemini(opts: {
 
   for (const model of opts.models) {
     for (let attempt = 0; attempt < 3; attempt++) {
-      const res = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
-          { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key }, body }
-      )
-      const data = await res.json().catch(() => ({}))
+      let res: Response
+      let data: any
+      try {
+        res = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+              body,
+              signal: AbortSignal.timeout(TIMEOUT_MS),
+            }
+        )
+        data = await res.json()
+      } catch (e) {
+        const name = e instanceof Error ? e.name : ''
+        if (name === 'TimeoutError' || name === 'AbortError') {
+          console.error(`[gemini] ${model} timed out after ${TIMEOUT_MS / 1000}s`)
+          wasBusy = true
+          lastError = `${model} took longer than ${TIMEOUT_MS / 1000} s.`
+          break // a slow model: go straight to the next one instead of waiting again
+        }
+        throw e
+      }
 
       if (res.ok) {
         const cand = data.candidates?.[0]
