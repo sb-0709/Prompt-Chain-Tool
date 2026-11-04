@@ -1,4 +1,4 @@
-# Prompt chain tool (Week 8)
+# Prompt chain tool 
 
 Superadmin-only tool for building and running multi-step prompt chains on top of the
 same Supabase project as the caption app and admin panel.
@@ -37,4 +37,4 @@ Tick **Send the image to this step** on any step that needs to see the image.
 4. `npm install` then `npm run dev`.
 
 Built with Next.js 16, Supabase, and the Gemini REST API.
-# Prompt-Chain-Tool
+
